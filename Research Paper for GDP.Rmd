@@ -1,0 +1,372 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+# Loading all libraries.
+```{r, echo=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(car)
+```
+
+```{r}
+# Loading the dataset taken from Kaggle
+gdp <- read.csv("2019.csv")
+
+# Selecting appropiate variables
+gdp <- gdp %>% dplyr::select(GDP.per.capita, Social.support, Healthy.life.expectancy, Freedom.to.make.life.choices, Generosity, Perceptions.of.corruption)
+
+
+# Split the data set into training and test data 
+set.seed(1000)
+# training data
+split <- sample(1:nrow(gdp), 78, replace=F)
+temp <- gdp[split, ]
+#test data
+test <- gdp[-split, ]
+
+
+
+
+# Making all values positive in case I need to do transformation. 
+
+temp$GDP.per.capita[temp$GDP.per.capita == 0]<- 0.00001
+temp$Social.support[temp$Social.support == 0]<- 0.00001
+temp$Healthy.life.expectancy[temp$SHealthy.life.expectancy == 0]<- 0.00001
+temp$Freedom.to.make.life.choices[temp$Freedom.to.make.life.choices == 0]<- 0.00001
+temp$Generosity[temp$Generosity == 0]<- 0.00001
+temp$Perceptions.of.corruption[temp$Perceptions.of.corruption == 0]<- 0.00001
+temp$Healthy.life.expectancy[temp$Healthy.life.expectancy == 0]<- 0.00001
+
+
+
+```
+
+Numerical Summaries/Plots
+```{r}
+summary(temp) %>% kable(label="Numerical summaries of the variables")
+
+
+par(mfrow=c(2,3))
+for(i in 1:6){
+  hist(temp[,i], main=paste0("Histogram of ", names(temp)[i]), xlab=names(temp)[i]
+          , horizontal=T)
+}
+```
+
+
+Exploration Data Analysis
+```{r}
+pairs(~ GDP.per.capita + Social.support +  Healthy.life.expectancy + Freedom.to.make.life.choices + Generosity + Perceptions.of.corruption, data = temp)
+```
+- In terms of linearity only perception of corruption seems to be violating the assumption.
+- Other looks okay.
+```{r}
+# Fit the model with all 5 predictors
+model <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy  + Freedom.to.make.life.choices + Perceptions.of.corruption + Generosity, data = temp)
+summary(model)
+
+# doing boxCox to see if transformation is needed
+x <- c(temp$Social.support, temp$SHealthy.life.expectancy , temp$SFreedom.to.make.life.choices , temp$SGenerosity ,  temp$SPerceptions.of.corruption)
+
+b <- boxCox(model)
+lambda <- b$x[which.max(b$GDP.per.capita)]
+```
+
+The result from boxCox tells me no transformation needed for response variable. 
+
+```{r}
+
+# doing power transformation to see if any variables need transformation 
+transform <- powerTransform(cbind(temp[,]))
+summary(transform)
+
+# GDP is okay
+# Social support needs transformation by x^2
+# Health life exp and Freedom to life do not transform
+# generosity needs to be transformed by log(x)
+# Perception needs to be transformed by x^(1/2) 
+
+temp1 <- temp %>% mutate(Perceptions.of.corruption = (temp$Perceptions.of.corruption)^(1/2))
+temp1 <- temp1 %>% mutate(Generosity = (log(temp$Generosity)))
+temp1 <- temp1 %>% mutate(Social.support = (temp$Social.support)^(2))
+
+pairs(~ GDP.per.capita+Social.support +  Healthy.life.expectancy + Freedom.to.make.life.choices + Generosity + Perceptions.of.corruption, data = temp1)
+
+
+# created the model with transformed variables. 
+model1 <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy  + Freedom.to.make.life.choices + Perceptions.of.corruption + Generosity, data = temp1)
+summary(model1)
+
+# So far linearity is fine. 
+
+par(mfrow=c(3, 3))
+r <- model$residuals
+fit <- model1$fitted.values
+plot(r ~ fit, xlab="Fitted", ylab="Residuals", main = "Figure a. Residual vs Fitted Values")
+plot(r ~ temp1[,6], xlab="Perceptions.of.corruption", ylab="Residuals", main = "Figure b. Residual vs Perceptions of corruption")
+plot(r ~ temp1[,5], xlab="Generosity", ylab="Residuals", main = "Figure c. Residual vs Generosity")
+plot(r ~ temp1[,4], xlab="Freedom.to.make.life.choices", ylab="Residuals", main = "Figure d. Residual vs Freedom to make life choices")
+plot(r ~ temp1[,2], xlab="Social.support", ylab="Residuals", main = "Figure e. Residual vs Social Support")
+plot(r ~ temp1[,3], xlab="Healthy.life.expectancy", ylab="Residuals", main = "Figure f. Residual vs Healthy life expectancy")
+qqnorm(r)
+qqline(r)
+# no violation of constant variance
+# slightly normality fail 
+# no uncorrelated errors as ...
+# check condition 1
+fit <- model1$fitted.values
+plot(temp1$GDP.per.capita ~ fit, xlab = "Fitted valued", ylab = "Response", main = "Figure g. Response vs Fitted values")
+abline(a = 0, b = 1)
+lines(lowess(temp1$GDP.per.capita ~ fit), lty=2)
+# can be mapped by a simple identity function 
+
+# check condition 2
+pairs(~ GDP.per.capita+Social.support +  Healthy.life.expectancy + Freedom.to.make.life.choices + Generosity + Perceptions.of.corruption, data = temp1)
+
+
+```
+
+```{r}
+
+
+vif(model1) 
+# no violation of since no variances inflated by more than a factor of 5 and the
+# either predictors have linear relationship or have no visible nonlinear/sinusoidal/exponential relationship
+
+```
+
+Condition 1 and 2 are satisfied. 
+
+
+Outliers
+```{r}
+str(temp1)
+
+# Box plots of the variables
+par(mfrow=c(2,3))
+for(i in 1:6){
+  boxplot(temp1[,i], main=paste0("Boxplot of ", names(temp1)[i]), xlab=names(temp1)[i]
+          , horizontal=T)
+}
+
+# Number of rows
+num <- nrow(temp1)
+# Number of predictors
+pp <- length(coef(model1))-1
+
+# define the cutoffs we will use
+Hcut. <- 2*((pp+1)/num)
+DFFITScut. <- 2*sqrt((pp+1)/num)
+DFBETAcut. <- 2/sqrt(num)
+Dcut. <- qf(0.5, pp+1, num-pp-1)
+
+# identify the leverage points
+h. <- hatvalues(model1)
+which(h.>Hcut.)
+
+# identify the outliers
+r. <- rstandard(model1)
+which(r. < -2 | r. > 2)
+which(r. < -4 | r. > 4)
+
+# identify influential points by Cook's distance
+D. <- cooks.distance(model)
+which(D. > Dcut.)
+
+# identify influential points by DFFITS
+fits. <- dffits(model)
+which(abs(fits.) > DFFITScut.)
+
+# identify influential points by DFBETAS
+betas. <- dfbetas(model)
+dim(betas.)
+
+for(i in 1:6){
+  print(paste0("Beta ", i-1))
+  print(which(abs(betas.[,i]) > DFBETAcut.))
+}
+
+# row 44 problematic
+
+plot(temp$GDP.per.capita~fitted(model))
+```
+
+- outliers in only freedom and perception variables, they impact our ability to accurately measure means/centres and spread
+
+We notice a few outliers in the boxplots, but it's important to realize that these outliers are not the same as the ones we have defined for linear regression (or at least we don't know yet whether they are both kinds of outliers). So while it's important to highlight the boxplot outliers, we should not remove them yet as we do not know whether they may be problematic to the regression fit yet.
+
+```{r}
+summary(model1)
+# we find from the t-test that Freedom.to.make.life.choices and Perceptions.of.corruption is not significant 
+
+# we fit a model without the Perceptions.of.corruption. 
+reduced_model1 <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy + Generosity + Freedom.to.make.life.choices, data = temp1)
+
+
+anova(reduced_model1, model1)
+# p value is significant so cannot reduce model which means Perceptions.of.corruption is important 
+
+# we fit a model without the Freedom.to.make.life.choices variable.
+reduced_model2 <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy + Generosity + Perceptions.of.corruption, data = temp1)
+summary(reduced_model2)
+
+anova(reduced_model2, model1)
+# p value not significant so can reduce model which means freedom not important 
+
+# we fit a model without the two non-significant predictors.
+reduced_model3 <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy + Generosity, data = temp1)
+summary(reduced_model3)
+
+anova(reduced_model3, model1)
+# p value not significant so can reduce model and remove Freedom.to.make.life.choices and Perceptions.of.corruption. 
+
+
+aic <- AIC(reduced_model3, reduced_model2, model1)
+# AIC for model with out Freedom.to.make.life.choices and Perceptions.of.corruption is a better model.
+# AIC for reduced model 2 better
+
+bic <- BIC(reduced_model3, reduced_model2, model1)
+# BIC for model with out Freedom.to.make.life.choices and Perceptions.of.corruption is a better model.
+# BIC for reduced model 3 better
+
+# R^2 for reduced model 2 is 0.7327 and R^2 for reduced model3 is 0.718. 
+
+# Since AIC and R^2 for reduced model 2 is better so thats the final model which consist of Social.support, Healthy.life.expectancy, Generosity, Perceptions.of.corruption
+
+```
+
+CHECK ASSUMPTION FOR THIS NEW MODEL
+```{r}
+final_model <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy + Generosity + Perceptions.of.corruption, data = temp1)
+
+pairs(~ GDP.per.capita+Social.support +  Healthy.life.expectancy + Generosity + Perceptions.of.corruption, data = temp1)
+
+
+# So far linearity is fine. 
+
+par(mfrow=c(2,4))
+r <- final_model$residuals
+fit <- final_model1$fitted.values
+plot(r ~ fit, xlab="Fitted", ylab="Residuals", main = "Figure 1. Residual vs Fitted Values")
+plot(r ~ temp1[,6], xlab="Perceptions.of.corruption", ylab="Residuals", main = "Figure 2. Residual vs Perceptions of corruption")
+plot(r ~ temp1[,5], xlab="Generosity", ylab="Residuals", main = "Figure 3. Residual vs Generosity")
+plot(r ~ temp1[,2], xlab="Social.support", ylab="Residuals", main = "Figure 5. Residual vs Social Support")
+plot(r ~ temp1[,3], xlab="Healthy.life.expectancy", ylab="Residuals", main = "Figure 6. Residual vs Healthy life expectanc7")
+qqnorm(r)
+qqline(r)
+
+# check condition 1
+fit <- final_model$fitted.values
+plot(temp1$GDP.per.capita ~ fit)
+abline(a = 0, b = 1)
+lines(lowess(temp1$GDP.per.capita ~ fit), lty=2)
+# can be mapped by a simple identity function 
+
+
+vif(final_model)
+# no violation of since no variances inflated by more than a factor of 5 and the
+# either predictors have linear relationship or have no visible nonlinear/sinusoidal/exponential relationship
+
+```
+
+TEST DATA
+```{r}
+test$GDP.per.capita[test$GDP.per.capita == 0]<- 0.00001
+test$Social.support[test$Social.support == 0]<- 0.00001
+test$Healthy.life.expectancy[test$SHealthy.life.expectancy == 0]<- 0.00001
+test$Freedom.to.make.life.choices[test$Freedom.to.make.life.choices == 0]<- 0.00001
+test$Generosity[test$Generosity == 0]<- 0.00001
+test$Perceptions.of.corruption[test$Perceptions.of.corruption == 0]<- 0.00001
+test$Healthy.life.expectancy[test$Healthy.life.expectancy == 0]<- 0.00001
+
+summary(test) %>% kable(label="Numerical summaries of the variables")
+summary(temp) %>% kable(label="Numerical summaries of the variables")
+
+par(mfrow=c(2,3))
+for(i in 2:6){
+  hist(test[,i], main=paste0("Histogram of ", names(test)[i]), xlab=names(test)[i]
+          , horizontal=T)
+}
+
+pairs(~ GDP.per.capita + Social.support +  Healthy.life.expectancy + Freedom.to.make.life.choices + Generosity + Perceptions.of.corruption, data = test)
+
+
+# Fit the model with all 5 predictors
+model_test <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy + Perceptions.of.corruption + Generosity, data = test)
+summary(model_test)
+
+# doing boxCox to see if transformation is needed
+x <- c(test$Social.support, test$SHealthy.life.expectancy , test$SFreedom.to.make.life.choices , test$SGenerosity ,  test$SPerceptions.of.corruption)
+
+
+b <- boxCox(model_test)
+lambda <- b$x[which.max(b$test$GDP.per.capita)]
+
+transform <- powerTransform(cbind(test[,-c(1)]))
+summary(transform)
+
+
+test1 <- test %>% mutate(Perceptions.of.corruption = (test$Perceptions.of.corruption)^(1/2))
+test1 <- test %>% mutate(Generosity = ((test$Generosity)^(1/2)))
+test1 <- test %>% mutate(Social.support = (test$Social.support)^(2))
+
+pairs(~ GDP.per.capita+Social.support +  Healthy.life.expectancy + Generosity + Perceptions.of.corruption, data = test1)
+
+
+# created the model with transformed variables. 
+model_test1 <- lm(GDP.per.capita ~ Social.support +  Healthy.life.expectancy+ Perceptions.of.corruption + Generosity, data = test1)
+summary(model_test1)
+
+
+
+```
+
+
+K-nearest Model Algorithm
+```{r}
+library(caret)
+# Feature normalization
+train_data_norm <- scale(temp[, -1])  # Exclude the target variable
+test_data_norm <- scale(test[, -1])
+
+# Choose the optimal value of k using cross-validation
+set.seed(100)
+k_values <- seq(1, 15, by = 2)  # Odd values of k for simplicity
+knn_cv <- train(train_data_norm, temp$GDP.per.capita, method = "knn", tuneGrid = expand.grid(k = k_values), trControl = trainControl(method = "cv"))
+best_k <- knn_cv$bestTune$k
+
+temp$GDP.per.capita <- as.numeric(as.character(temp$GDP.per.capita))
+# Train the k-NN model
+knn_model <- as.numeric(knn(train_data_norm, test_data_norm, temp$GDP.per.capita, k = best_k))
+
+##create the confucion matrix
+ tb <- table(knn_model,test$GDP.per.capita)
+ 
+ accuracy <- function(x){sum(diag(x)/(sum(rowSums(x)))) * 100}
+ accuracy(tb)
+
+test$GDP.per.capita <- as.numeric(as.character(test$GDP.per.capita))
+# Evaluate the model
+mse <- mean((knn_model - test$GDP.per.capita)^2)
+
+# Print the Mean Squared Error (MSE)
+print(paste("Mean Squared Error (MSE):", mse))
+```
+We used the training data into training data.
+We normalized the features to ensure equal weighting.
+We selected the optimal k value using cross-validation.
+We trained the k-NN model and evaluated its performance using Mean Squared Error (MSE).
+
+The Mean Squared Error is 1859.71240961538. 
+The interpretation for this would be:
+Scale of Error: The MSE is sensitive to the scale of the target variable (GPD in this case). A higher MSE indicates that, on average, the predictions are off by a larger amount.
+
+Lower MSE is Better: In general, a lower MSE is desired. A smaller MSE indicates that the predictions are closer to the actual values, implying a better-performing model. Here the MSE is very high indicating that the model is a poor predictor. 
+
+Comparison: To assess the quality of this MSE, you would typically compare it with the MSE of other models. Lower MSE compared to an alternative model suggests that this k-nearest neighbors model might be more accurate in predicting GDP.
+
+
